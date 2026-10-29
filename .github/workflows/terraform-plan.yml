@@ -1,0 +1,83 @@
+name: terraform-plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+
+permissions:
+  id-token: write       # needed for OIDC login to AWS
+  contents: read
+  pull-requests: write  # needed to post the plan comment
+
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint
+        run: |
+          tflint --init
+          tflint --recursive
+
+      - name: Checkov security scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          soft_fail: true
+
+      - name: Configure AWS credentials (OIDC, read-only plan role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PLAN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Terraform init
+        run: terraform init -backend-config=envs/dev/backend.hcl
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -input=false -no-color -var-file=envs/dev/dev.tfvars -out=tfplan
+
+      - name: Show plan
+        run: terraform show -no-color tfplan > plan.txt
+
+      - name: Comment plan on the PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('plan.txt', 'utf8');
+            if (plan.length > 60000) { plan = plan.substring(0, 60000) + '\n... (truncated)'; }
+            const body = '### Terraform plan (dev)\n```\n' + plan + '\n```';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
