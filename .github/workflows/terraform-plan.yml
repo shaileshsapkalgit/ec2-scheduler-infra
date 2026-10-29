@@ -48,6 +48,11 @@ jobs:
           framework: terraform
           soft_fail: true
 
+      - name: Debug OIDC subject (temporary)
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | python3 -c "import sys,base64,json; s=sys.stdin.read().strip(); s+='='*(-len(s)%4); d=json.loads(base64.b64decode(s)); print({k:d.get(k) for k in ['sub','aud','repository','event_name','ref']})"
+
       - name: Configure AWS credentials (OIDC, read-only plan role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
